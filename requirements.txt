@@ -1,0 +1,10 @@
+
+cryptography
+certifi
+asn1crypto
+ocspbuilder
+blessed
+psutil
+scapy
+netifaces
+requests
