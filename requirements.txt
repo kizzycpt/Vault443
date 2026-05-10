@@ -8,3 +8,6 @@ psutil
 scapy
 netifaces
 requests
+climage
+beautifulsoup4
+playwright
