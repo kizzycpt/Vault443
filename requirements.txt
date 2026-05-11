@@ -9,5 +9,7 @@ scapy
 netifaces
 requests
 climage
+bs4
 beautifulsoup4
 playwright
+lxml
