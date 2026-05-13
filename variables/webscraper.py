@@ -51,6 +51,10 @@ class WebScraper:
         #Find out what framework is needed
         if search_flag in response.text:
             soup = BeautifulSoup(response.text, "html.parser")
+            print(soup.prettify())
+
+            soup.find(string=search_flag)
+
         
         else:
             try:
@@ -62,10 +66,13 @@ class WebScraper:
                     page = browser.new_page()
                     page.goto(url)
 
-                    page.wait_for_selector(search_flag)
 
-                html = page.content()
-                soup = BeautifulSoup(html, "html.parser")
+                    html = page.content()
+                    soup = BeautifulSoup(html, "html.parser")
+                    
+                    print(soup.prettify())
+                    soup.find(string=search_flag)
+
 
             except Exception as e:
                 print(f"Error parsing data. {e}")
