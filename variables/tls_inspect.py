@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
-import ssl
-import socket
+import ssl, socket
 from datetime import datetime
 
 def inspect_cert():
