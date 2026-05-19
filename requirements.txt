@@ -13,3 +13,4 @@ bs4
 beautifulsoup4
 playwright
 lxml
+scipy

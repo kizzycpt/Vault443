@@ -1,4 +1,32 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
 
-venv/
+# Logs & reports
+logs/
+reports/
+*.log
+log/
+
+# Virtual environments
 .venv/
+venv/
+ENV/
 
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE settings
+.vscode/
+.idea/
+
+#sepcific files
+test.py
+old ARP.py
+
+# PyInstaller
+build/
+dist/
+*.spec
