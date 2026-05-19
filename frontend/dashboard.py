@@ -249,7 +249,7 @@ class Dashboard:
                 if in_top or in_bot:
                     tr, tg, tb  = frame.getpixel((px, py_top)) if in_top else (0, 0, 0)
                     br, bg_, bb = frame.getpixel((px, py_bot)) if in_bot else (0, 0, 0)
-                    line.append(rgb_bg(tr, tg, tb) + rgb(br, bg_, bb) + "▄" + RESET)
+                    line.append(rgb_bg(tr, tg, tb) + rgb(br, bg_, bb) + "▂" + RESET)
                 else:
                     line.append(" ")
             lines.append("".join(line))

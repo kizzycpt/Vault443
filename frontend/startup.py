@@ -67,7 +67,7 @@ def _render_frame_fullscreen(frame: Image.Image, tw: int, th: int) -> str:
             if in_top or in_bot:
                 tr, tg, tb  = frame.getpixel((px, py_top)) if in_top else (0, 0, 0)
                 br, bg_, bb = frame.getpixel((px, py_bot)) if in_bot else (0, 0, 0)
-                row.append(_rgb_bg(tr, tg, tb) + _rgb(br, bg_, bb) + "▄" + RESET)
+                row.append(_rgb_bg(tr, tg, tb) + _rgb(br, bg_, bb) + "▖" + RESET)
             else:
                 row.append(" ")
         lines.append("".join(row))
