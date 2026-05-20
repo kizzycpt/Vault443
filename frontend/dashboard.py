@@ -221,37 +221,35 @@ class Dashboard:
         if frame is None or cols < 1 or rows < 1:
             return [" " * cols] * rows
 
-        target_px_w = cols
-        target_px_h = rows * 2
+        target_w = cols
+        target_h = rows * 2
 
-        scale = min(target_px_w / frame.width, target_px_h / frame.height)
+        scale = min(target_w / frame.width, target_h / frame.height)
         new_w = max(1, int(frame.width  * scale))
-        new_h = max(2, int(frame.height * scale))
-        if new_h % 2:
-            new_h -= 1
+        new_h = max(2, int(frame.height * scale) // 2 * 2)  # force even
 
-        frame = frame.resize((new_w, new_h), Image.LANCZOS)
+        frame = frame.resize((new_w, new_h), Image.NEAREST)
+        pixels = frame.load()
 
-        off_px_x = (target_px_w - new_w) // 2
-        off_px_y = (target_px_h - new_h) // 2
-        if off_px_y % 2:
-            off_px_y -= 1
+        # center
+        ox = (target_w - new_w) // 2
+        oy = (target_h - new_h) // 2 // 2  # in cell-rows
 
         lines = []
         for row in range(rows):
-            py_top = row * 2 - off_px_y
-            py_bot = py_top + 1
-            line   = []
+            line = []
             for col in range(cols):
-                px     = col - off_px_x
-                in_top = 0 <= py_top < new_h and 0 <= px < new_w
-                in_bot = 0 <= py_bot < new_h and 0 <= px < new_w
-                if in_top or in_bot:
-                    tr, tg, tb  = frame.getpixel((px, py_top)) if in_top else (0, 0, 0)
-                    br, bg_, bb = frame.getpixel((px, py_bot)) if in_bot else (0, 0, 0)
-                    line.append(rgb_bg(tr, tg, tb) + rgb(br, bg_, bb) + "▂" + RESET)
-                else:
-                    line.append(" ")
+                src_x = col - ox
+                src_y = (row - oy) * 2
+
+                def get_px(x, y):
+                    if 0 <= x < new_w and 0 <= y < new_h:
+                        return pixels[x, y]
+                    return (0, 0, 0)
+
+                tr, tg, tb = get_px(src_x, src_y)
+                br, bg_, bb = get_px(src_x, src_y + 1)
+                line.append(rgb_bg(tr, tg, tb) + rgb(br, bg_, bb) + "▄" + RESET)
             lines.append("".join(line))
         return lines
 
@@ -263,7 +261,7 @@ class Dashboard:
 
     # ── panel renderers ───────────────────────────────────────────────────────
     #
-    # Sauron-style: each renderer builds a 2-D screen array
+    # each renderer builds a 2-D screen array
     #   screen[row][col] = (str_cell, bool)
     # where str_cell is a plain character or a pre-coloured ANSI string.
     # render() stamps each cell into the left panel's inner area at (y+1, x+1).
@@ -506,9 +504,9 @@ class Dashboard:
         main_h       = th - 2                   # left panel inner height
         feed_x       = main_w + 1              # x-origin of right column
 
-        stats_h      = 11                       # stats panel total height (incl. borders)
-        feed_h       = th - stats_h - 1        # gif panel total height   (incl. borders)
-        stats_y      = feed_h                  # row where stats panel starts
+        stats_h      = 6                       # stats panel total height (incl. borders)
+        feed_h       = th - stats_h - 7  # gif panel total height   (incl. borders)
+        stats_y      = feed_h +1                 # row where stats panel starts
 
         # Inner dimensions passed to panel renderers
         left_inner_w    = main_w - 2
@@ -562,9 +560,9 @@ class Dashboard:
 
         # ── gif panel ─────────────────────────────────────────────────────────
         gif_inner_w = right_w - 2
-        gif_inner_h = feed_h  - 2          # exclude top AND bottom border rows
+        gif_inner_h = feed_h  - 1          # exclude top AND bottom border rows
 
-        gif_title = " Live Feed "
+        gif_title = " Vault Boy "
         gif_fill  = "─" * (right_w - len(gif_title) - 2)
         out.append(self.term.move(0,      feed_x) + fc("┌" + gif_title + gif_fill + "┐"))
         out.append(self.term.move(feed_h, feed_x) + fc("└" + "─" * (right_w - 2) + "┘"))

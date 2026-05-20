@@ -14,4 +14,4 @@ beautifulsoup4
 playwright
 lxml
 scipy
-traceback
+pywifi

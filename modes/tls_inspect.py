@@ -45,15 +45,15 @@ class TLSInspect:
                     else:
                         status = "Valid"
 
-                    tls_version              = ssocks.version()
+                    tls_version                 = ssocks.version()
                     cipher_name, _, cipher_bits = ssocks.cipher()
 
-                    self.results["domain"]  = common_name
-                    self.results["status"]  = f"{status} ({days_left} days left)"
-                    self.results["issuer"]  = org
-                    self.results["expires"] = expiry_str
-                    self.results["tls"]     = tls_version
-                    self.results["cipher"]  = f"{cipher_name} ({cipher_bits} bits)"
+                    self.results["domain"]      = common_name
+                    self.results["status"]      = f"{status} ({days_left} days left)"
+                    self.results["issuer"]      = org
+                    self.results["expires"]     = expiry_str
+                    self.results["tls"]         = tls_version
+                    self.results["cipher"]      = f"{cipher_name} ({cipher_bits} bits)"
 
         except ssl.SSLCertVerificationError as e:
             self.results["error"] = f"Certificate error: {e}"
