@@ -28,9 +28,10 @@ except Exception:
     tls_inspection = None
 
 try:
-    from modes.ip_scanner import ip_scanner
-except Exception:
-    ip_scanner = None
+    from modes.ip_scan import mass_ip_scanner
+except Exception as e:
+    print(f"IP scanner Import Failed {e}")
+    mass_ip_scanner = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,7 +77,7 @@ class Dashboard:
         # tool references
         self.web_scraper_panel   = web_scraper
         self.tls_inspect_panel   = tls_inspection
-        self.ip_scan_panel       = ip_scanner
+        self.ip_scan_panel       = mass_ip_scanner
 
         # panel visibility flags
         self.web_scraper_mode    = False
@@ -88,8 +89,7 @@ class Dashboard:
         self.tls_inspect_state   = 0
         self.ip_scan_state       = 0
 
-        # input routing
-        # modes: None | "tls_host" | "scraper_domain" | "scraper_flag"
+        # input routing  None | "tls_host" | "scraper_domain" | "scraper_flag" | "ip_threads"
         self.active_input_mode   = None
         self.input_buffer        = ""
         self._scraper_domain     = ""
@@ -110,8 +110,8 @@ class Dashboard:
 
     def cycle_theme(self):
         self.current_theme_index = (self.current_theme_index + 1) % len(self.theme_names)
-        self.theme = self.THEMES[self.theme_names[self.current_theme_index]]
-        self.matrix_cols = {}
+        self.theme               = self.THEMES[self.theme_names[self.current_theme_index]]
+        self.matrix_cols         = {}
 
     def get_color(self, color_name, dim=False):
         r, g, b = self._RGB.get(color_name, (255, 255, 255))
@@ -187,9 +187,6 @@ class Dashboard:
                 c["chars"][r] = random.choice(self._MATRIX_CHARS)
 
     def render_matrix(self, width, height):
-        # width/height are the inner drawable dimensions — borders already excluded.
-        # Returns a screen array matching the sauron convention so render() can
-        # iterate all panel types uniformly: list[list[(str, bool)]].
         self._init_matrix(width, height)
         self._update_matrix(width, height)
         mr, mg, mb = self.theme.get("matrix", (0, 255, 65))
@@ -204,7 +201,7 @@ class Dashboard:
                 if dist == 0:
                     screen[row][col] = (rgb(255, 255, 255) + ch + RESET, False)
                 elif dist < c["trail"]:
-                    fade = 1.0 - dist / c["trail"]
+                    fade             = 1.0 - dist / c["trail"]
                     screen[row][col] = (
                         rgb(int(mr * fade), int(mg * fade), int(mb * fade)) + ch + RESET,
                         False,
@@ -212,10 +209,6 @@ class Dashboard:
         return screen
 
     # ── gif / halfblock panel ─────────────────────────────────────────────────
-    #
-    # Half-block trick: each terminal cell renders 2 pixel rows via "▄"
-    #   background colour → upper pixel row
-    #   foreground colour → lower pixel row
 
     def _render_halfblock(self, frame: Image.Image, cols: int, rows: int) -> list:
         if frame is None or cols < 1 or rows < 1:
@@ -223,17 +216,14 @@ class Dashboard:
 
         target_w = cols
         target_h = rows * 2
+        scale    = min(target_w / frame.width, target_h / frame.height)
+        new_w    = max(1, int(frame.width  * scale))
+        new_h    = max(2, int(frame.height * scale) // 2 * 2)
 
-        scale = min(target_w / frame.width, target_h / frame.height)
-        new_w = max(1, int(frame.width  * scale))
-        new_h = max(2, int(frame.height * scale) // 2 * 2)  # force even
-
-        frame = frame.resize((new_w, new_h), Image.NEAREST)
+        frame  = frame.resize((new_w, new_h), Image.NEAREST)
         pixels = frame.load()
-
-        # center
-        ox = (target_w - new_w) // 2
-        oy = (target_h - new_h) // 2 // 2  # in cell-rows
+        ox     = (target_w - new_w) // 2
+        oy     = (target_h - new_h) // 2 // 2
 
         lines = []
         for row in range(rows):
@@ -247,7 +237,7 @@ class Dashboard:
                         return pixels[x, y]
                     return (0, 0, 0)
 
-                tr, tg, tb = get_px(src_x, src_y)
+                tr, tg, tb  = get_px(src_x, src_y)
                 br, bg_, bb = get_px(src_x, src_y + 1)
                 line.append(rgb_bg(tr, tg, tb) + rgb(br, bg_, bb) + "▄" + RESET)
             lines.append("".join(line))
@@ -259,21 +249,12 @@ class Dashboard:
             return [" " * cols] * rows
         return self._render_halfblock(frame, cols, rows)
 
-    # ── panel renderers ───────────────────────────────────────────────────────
-    #
-    # each renderer builds a 2-D screen array
-    #   screen[row][col] = (str_cell, bool)
-    # where str_cell is a plain character or a pre-coloured ANSI string.
-    # render() stamps each cell into the left panel's inner area at (y+1, x+1).
-    #
-    # (width, height) received = inner drawable size (borders already excluded).
-    # inner_w = width - 4   →   2 border cols + 2 padding cols of breathing room.
+    # ── panel helpers ─────────────────────────────────────────────────────────
 
     def _blank_screen(self, width, height):
         return [[(" ", False)] * width for _ in range(height)]
 
     def _write_line(self, screen, row, col, text, width):
-        """Stamp text into screen at (row, col), hard-clipped to width."""
         for i, ch in enumerate(text):
             if col + i >= width:
                 break
@@ -282,10 +263,10 @@ class Dashboard:
     # ── TLS inspect panel ─────────────────────────────────────────────────────
 
     def render_tls_panel(self, width, height):
-        screen  = self._blank_screen(width, height)
-        p       = self.tls_inspect_panel
-        inner   = width - 4                     # usable text width inside padding
-        pad_x   = 2                             # left indent
+        screen = self._blank_screen(width, height)
+        p      = self.tls_inspect_panel
+        inner  = width - 4
+        pad_x  = 2
 
         if p and p.scanning:
             status = f"SCANNING  {p.host}..."
@@ -313,7 +294,7 @@ class Dashboard:
                 "  ENTER to scan  |  ESC to cancel",
             ]
         elif p and p.scanning:
-            dots = "." * (int(time.time() * 2) % 4)
+            dots   = "." * (int(time.time() * 2) % 4)
             lines += [f"  Connecting{dots}"]
         elif p and p.scan_done and p.results:
             r     = p.results
@@ -351,10 +332,10 @@ class Dashboard:
     # ── web scraper panel ─────────────────────────────────────────────────────
 
     def render_scraper_panel(self, width, height):
-        screen  = self._blank_screen(width, height)
-        p       = self.web_scraper_panel
-        inner   = width - 4
-        pad_x   = 2
+        screen = self._blank_screen(width, height)
+        p      = self.web_scraper_panel
+        inner  = width - 4
+        pad_x  = 2
 
         if p and p.scanning:
             status = f"SCRAPING  {getattr(p, 'domain', '...')}..."
@@ -390,7 +371,7 @@ class Dashboard:
                 "  ENTER to scrape  |  ESC to cancel",
             ]
         elif p and p.scanning:
-            dots = "." * (int(time.time() * 2) % 4)
+            dots   = "." * (int(time.time() * 2) % 4)
             lines += [f"  Fetching page{dots}"]
         elif p and p.scan_done and p.results:
             r     = p.results
@@ -403,7 +384,7 @@ class Dashboard:
                                 for i in range(0, min(len(result), col_w * 3), col_w)]
                 lines += [
                     f"  {'Code':<10}: {r.get('status_code', '?')}",
-                    f"  {'Engine':<10}: {r.get('engine', '?')}",
+                    f"  {'Engine':<10}: {r.get('engine',     '?')}",
                     f"  {'Result':<10}:",
                 ]
                 for rl in result_lines:
@@ -430,18 +411,17 @@ class Dashboard:
     # ── IP scanner panel ──────────────────────────────────────────────────────
 
     def render_ip_scan_panel(self, width, height):
-        screen  = self._blank_screen(width, height)
-        p       = self.ip_scan_panel
-        inner   = width - 4
-        pad_x   = 2
-        results = (p.results if p else []) or []
+        screen = self._blank_screen(width, height)
+        p      = self.ip_scan_panel
+        inner  = width - 4
+        pad_x  = 2
 
-        status = (
-            "MODULE NOT LOADED" if p is None else
-            "SCANNING..."       if p.scanning else
-            "COMPLETE"          if p.scan_done else
-            "READY"
-        )
+        if p and p.scanning:
+            status = "SCANNING..."
+        elif p and p.scan_done:
+            status = "COMPLETE"
+        else:
+            status = "READY"
 
         sep  = "═" * inner
         dash = "─" * inner
@@ -450,24 +430,60 @@ class Dashboard:
             sep,
             "IP SCANNER".center(inner),
             sep,
-            f"  Status  : {status}",
-            f"  Hosts   : {len(results)}",
+            f"  Status   : {status}",
             dash,
         ]
 
-        max_result_rows = height - len(lines) - 5
-        if results:
-            for entry in results[-max(1, max_result_rows):]:
-                lines.append(f"  {str(entry)[:inner - 4]}")
+        # ── thread count prompt ───────────────────────────────────────────────
+        if self.active_input_mode == "ip_threads":
+            lines += [
+                "  Enter thread count (default 250):",
+                f"  > {self.input_buffer}█",
+                "",
+                "  ENTER to start  |  ESC to cancel",
+            ]
+
+        # ── live scan view ────────────────────────────────────────────────────
+        elif p and (p.scanning or p.scan_done):
+            scanned  = getattr(p, "scanned_ips", 0)
+            online   = getattr(p, "online_ips",  0)
+            errors   = getattr(p, "errors",      0)
+            threads  = getattr(p, "threads",      0)
+            hit_rate = f"{(online / scanned * 100):.3f}%" if scanned > 0 else "0.000%"
+
+            lines += [
+                f"  Scanned  : {scanned:,}",
+                f"  Online   : {online:,}",
+                f"  Hit Rate : {hit_rate}",
+                f"  Errors   : {errors:,}",
+                f"  Threads  : {threads}",
+                dash,
+            ]
+
+            # live IP feed — fills all remaining rows
+            found       = getattr(p, "found", [])
+            header_rows = len(lines)
+            footer_rows = 3                              # dash + controls + sep
+            feed_rows   = max(1, height - header_rows - footer_rows)
+            visible     = found[-feed_rows:]
+
+            if visible:
+                for ip, port in visible:
+                    lines.append(f"  [+] {ip}:{port}"[:inner])
+            else:
+                dots = "." * (int(time.time() * 2) % 4)
+                lines.append(f"  Waiting for hits{dots}")
+
+        # ── idle ──────────────────────────────────────────────────────────────
         else:
-            lines.append(
+            lines += [
                 "  Press [I] to start scan" if p
-                else "  Drop ip_scanner.py in modes/ to enable"
-            )
+                else "IP Scan module not configured correctly"
+            ]
 
         lines += [
             dash,
-            "  [I] Scan   [X] Close   [Q] Quit",
+            "  [I] New scan   [X] Close   [Q] Quit",
             sep,
         ]
 
@@ -486,34 +502,16 @@ class Dashboard:
         tw = self.term.width
         th = self.term.height
 
-        # ── layout ────────────────────────────────────────────────────────────
-        #
-        #   col 0              col main_w-1   col feed_x       col tw-1
-        #   ┌─ left panel ──────────────────┐  ┌─ right col ──────────────┐
-        #   │ border at 0 and main_w-1       │  │ border at feed_x and     │
-        #   │ inner x: 1 .. main_w-2         │  │ feed_x + right_w - 1     │
-        #   │ inner w: main_w - 2            │  │                          │
-        #   │ inner h: main_h  (rows 1..mh)  │  │ gif panel   : feed_h rows│
-        #   │                                │  │ stats panel : below      │
-        #   └────────────────────────────────┘  └──────────────────────────┘
-        #
-        # One blank separator column sits at x = main_w (not drawn).
-
-        right_w      = max(26, int(tw * 0.28))  # right col total width (incl. borders)
-        main_w       = tw - right_w - 1         # left panel total width (incl. borders)
-        main_h       = th - 2                   # left panel inner height
-        feed_x       = main_w + 1              # x-origin of right column
-
-        stats_h      = 6                       # stats panel total height (incl. borders)
-        feed_h       = th - stats_h - 7  # gif panel total height   (incl. borders)
-        stats_y      = feed_h +1                 # row where stats panel starts
-
-        # Inner dimensions passed to panel renderers
-        left_inner_w    = main_w - 2
-        left_inner_h    = main_h
-        # Matrix rain gets 2 fewer rows so it never runs into the legend bar
-        # or the bottom border — one row is the legend itself, one is breathing room.
-        matrix_inner_h  = max(1, left_inner_h - 2)
+        right_w        = max(26, int(tw * 0.28))
+        main_w         = tw - right_w - 1
+        main_h         = th - 2
+        feed_x         = main_w + 1
+        stats_h        = 6
+        feed_h         = th - stats_h - 7
+        stats_y        = feed_h + 1
+        left_inner_w   = main_w - 2
+        left_inner_h   = main_h
+        matrix_inner_h = max(1, left_inner_h - 2)
 
         fc = self.get_color(self.theme["feed"])
         sc = self.get_color(self.theme["stats"])
@@ -560,7 +558,7 @@ class Dashboard:
 
         # ── gif panel ─────────────────────────────────────────────────────────
         gif_inner_w = right_w - 2
-        gif_inner_h = feed_h  - 1          # exclude top AND bottom border rows
+        gif_inner_h = feed_h  - 1
 
         gif_title = " Vault Boy "
         gif_fill  = "─" * (right_w - len(gif_title) - 2)
@@ -568,15 +566,15 @@ class Dashboard:
         out.append(self.term.move(feed_h, feed_x) + fc("└" + "─" * (right_w - 2) + "┘"))
 
         for y in range(1, feed_h):
-            out.append(self.term.move(y, feed_x)                + fc("│"))
-            out.append(self.term.move(y, feed_x + right_w - 1)  + fc("│"))
+            out.append(self.term.move(y, feed_x)               + fc("│"))
+            out.append(self.term.move(y, feed_x + right_w - 1) + fc("│"))
 
         for y, row_str in enumerate(self.gif_panel_render(gif_inner_w, gif_inner_h)):
             out.append(self.term.move(y + 1, feed_x + 1) + row_str)
 
         # ── stats panel ───────────────────────────────────────────────────────
-        st_title  = f" Stats — {self.theme['name'].upper()} "
-        st_fill   = "─" * (right_w - len(st_title) - 2)
+        st_title = f" Stats — {self.theme['name'].upper()} "
+        st_fill  = "─" * (right_w - len(st_title) - 2)
         out.append(self.term.move(stats_y, feed_x) + sc("┌" + st_title + st_fill + "┐"))
         out.append(self.term.move(th - 1,  feed_x) + sc("└" + "─" * (right_w - 2) + "┘"))
 
@@ -584,7 +582,6 @@ class Dashboard:
             out.append(self.term.move(y, feed_x)               + sc("│"))
             out.append(self.term.move(y, feed_x + right_w - 1) + sc("│"))
 
-        # stats content
         try:
             local_ip = socket.gethostbyname(socket.gethostname())
         except Exception:
@@ -594,10 +591,10 @@ class Dashboard:
         except Exception:
             mac = "unknown"
 
-        elapsed      = int(time.time() - self.start_time)
-        h, rem       = divmod(elapsed, 3600)
-        m, s         = divmod(rem, 60)
-        stats_inner  = right_w - 4             # 2 border + 2 padding
+        elapsed     = int(time.time() - self.start_time)
+        h, rem      = divmod(elapsed, 3600)
+        m, s        = divmod(rem, 60)
+        stats_inner = right_w - 4
 
         tls_stat = (
             "scanning" if (self.tls_inspect_panel and self.tls_inspect_panel.scanning) else
@@ -627,7 +624,7 @@ class Dashboard:
         ]
 
         for i, line in enumerate(stat_lines):
-            y = stats_y + 2 + i          # +2: skip title border row + 1 pad row
+            y = stats_y + 2 + i
             if y >= th - 2:
                 break
             out.append(
@@ -635,9 +632,7 @@ class Dashboard:
                 sc(line[:stats_inner].ljust(stats_inner))
             )
 
-        # ── status / legend bar ───────────────────────────────────────────────
-        # Drawn at main_h (the bottom border row of the left panel) so it sits
-        # inside the box and is never overwritten by the border draw above.
+        # ── legend bar ────────────────────────────────────────────────────────
         legend    = " [W]TLS  [S]Scrape  [I]IPScan  [T]Theme  [C]Legend  [Q]Quit"
         st_txt    = "PAUSED" if self.paused else "LIVE"
         st_col    = self.get_color("bright_red") if self.paused else self.get_color("bright_green")
@@ -646,16 +641,14 @@ class Dashboard:
         if self.show_legend:
             out.append(self.term.move(main_h, 1) + fc(legend[:bar_inner].center(bar_inner)))
         else:
-            tag      = f" {st_txt} "
-            rest_w   = max(0, bar_inner - len(tag))
-            rest     = legend[:rest_w]
+            tag    = f" {st_txt} "
+            rest_w = max(0, bar_inner - len(tag))
             out.append(
                 self.term.move(main_h, 1) +
                 st_col(tag) +
-                mc(rest.ljust(rest_w))
+                mc(legend[:rest_w].ljust(rest_w))
             )
 
-        # hide cursor, park safely
         out.append(self.term.move(th - 1, tw - 1) + "\033[?25l")
         sys.stdout.write("".join(out))
         sys.stdout.flush()
@@ -671,7 +664,7 @@ class Dashboard:
 
                 k = str(key).lower()
 
-                # ── text-input intercept ──────────────────────────────────────
+                # ── text input intercept ──────────────────────────────────────
                 if self.active_input_mode is not None:
                     if key.code == self.term.KEY_ENTER:
                         self._commit_input()
@@ -684,7 +677,7 @@ class Dashboard:
                         self.input_buffer += str(key)
                     continue
 
-                # ── normal key handling ───────────────────────────────────────
+                # ── hotkeys ───────────────────────────────────────────────────
                 if k == "q" or key.code == self.term.KEY_ESCAPE:
                     self.running = False
                 elif key == " ":
@@ -701,18 +694,12 @@ class Dashboard:
                     self._open_scraper()
                 elif k == "i":
                     if not self.ip_scan_mode:
-                        # open panel and immediately kick off the scan
-                        self.ip_scan_mode     = True
-                        self.tls_inspect_mode = False
-                        self.web_scraper_mode = False
-                        self.ip_scan_state    = 2
-                        if self.ip_scan_panel:
-                            self.ip_scan_panel.scan_done = False
-                            self.ip_scan_panel.scanning  = False
-                            Thread(target=self.ip_scan_panel.start, daemon=True).start()
+                        self._open_ip_scan()
                     else:
                         self.ip_scan_mode  = False
                         self.ip_scan_state = 0
+
+    # ── panel open / close ────────────────────────────────────────────────────
 
     def _close_all_panels(self):
         self.tls_inspect_mode  = False
@@ -725,7 +712,6 @@ class Dashboard:
         self.input_buffer      = ""
         self._scraper_domain   = ""
 
-        # reset backend state so reopening gets a clean slate
         if self.tls_inspect_panel:
             self.tls_inspect_panel.scan_done = False
             self.tls_inspect_panel.scanning  = False
@@ -735,8 +721,9 @@ class Dashboard:
             self.web_scraper_panel.scanning  = False
             self.web_scraper_panel.results   = {}
         if self.ip_scan_panel:
-            self.ip_scan_panel.scan_done = False
             self.ip_scan_panel.scanning  = False
+            self.ip_scan_panel.scan_done = False
+            self.ip_scan_panel.found     = []
 
     def _open_tls(self):
         self.tls_inspect_mode  = True
@@ -760,6 +747,20 @@ class Dashboard:
         if self.web_scraper_panel:
             self.web_scraper_panel.scan_done = False
             self.web_scraper_panel.results   = {}
+
+    def _open_ip_scan(self):
+        self.ip_scan_mode      = True
+        self.tls_inspect_mode  = False
+        self.web_scraper_mode  = False
+        self.ip_scan_state     = 1
+        self.active_input_mode = "ip_threads"    # ← only ask for thread count
+        self.input_buffer      = ""
+        if self.ip_scan_panel:
+            self.ip_scan_panel.scanning  = False
+            self.ip_scan_panel.scan_done = False
+            self.ip_scan_panel.found     = []
+
+    # ── commit input ──────────────────────────────────────────────────────────
 
     def _commit_input(self):
         val  = self.input_buffer.strip()
@@ -786,6 +787,15 @@ class Dashboard:
                     daemon=True,
                 ).start()
             self._scraper_domain = ""
+
+        elif mode == "ip_threads":
+            if self.ip_scan_panel:
+                try:
+                    threads = int(val) if val else 250
+                except Exception:
+                    threads = 250
+                self.ip_scan_state = 2
+                self.ip_scan_panel.start(threads=threads)   # ports auto-discovered
 
     # ── watch for tool completion ─────────────────────────────────────────────
 
