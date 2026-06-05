@@ -1,6 +1,6 @@
 import ipaddress, socket, requests, time, threading, sys, random
 
-from scapy.all              import IP, TCP, sr1
+from scapy.all              import IP, TCP, sr1, send
 from concurrent.futures     import ThreadPoolExecutor, as_completed
 
 
@@ -52,3 +52,12 @@ class IPScanner:
                         if self.save and self.curent_ips:
                             with T_LOCK: 
 
+    @classmethod
+    def iterate_ips_in_block():
+        
+        #Define target blocks
+        network = ipaddress.ip_network("Insert Blocks", strict=False)
+
+
+        for ip in network.hosts():
+            pkt = ImportError
