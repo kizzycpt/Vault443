@@ -27,11 +27,7 @@ try:
 except Exception:
     tls_inspection = None
 
-try:
-    from modes.ip_scan import mass_ip_scanner
-except Exception as e:
-    print(f"IP scanner Import Failed {e}")
-    mass_ip_scanner = None
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -77,17 +73,14 @@ class Dashboard:
         # tool references
         self.web_scraper_panel   = web_scraper
         self.tls_inspect_panel   = tls_inspection
-        self.ip_scan_panel       = mass_ip_scanner
 
         # panel visibility flags
         self.web_scraper_mode    = False
         self.tls_inspect_mode    = False
-        self.ip_scan_mode        = False
 
         # lifecycle  0=closed 1=input 2=running 3=done
         self.web_scraper_state   = 0
         self.tls_inspect_state   = 0
-        self.ip_scan_state       = 0
 
         # input routing  None | "tls_host" | "scraper_domain" | "scraper_flag" | "ip_threads"
         self.active_input_mode   = None
@@ -408,94 +401,6 @@ class Dashboard:
 
         return screen
 
-    # ── IP scanner panel ──────────────────────────────────────────────────────
-
-    def render_ip_scan_panel(self, width, height):
-        screen = self._blank_screen(width, height)
-        p      = self.ip_scan_panel
-        inner  = width - 4
-        pad_x  = 2
-
-        if p and p.scanning:
-            status = "SCANNING..."
-        elif p and p.scan_done:
-            status = "COMPLETE"
-        else:
-            status = "READY"
-
-        sep  = "═" * inner
-        dash = "─" * inner
-
-        lines = [
-            sep,
-            "IP SCANNER".center(inner),
-            sep,
-            f"  Status   : {status}",
-            dash,
-        ]
-
-        # ── thread count prompt ───────────────────────────────────────────────
-        if self.active_input_mode == "ip_threads":
-            lines += [
-                "  Enter thread count (default 250):",
-                f"  > {self.input_buffer}█",
-                "",
-                "  ENTER to start  |  ESC to cancel",
-            ]
-
-        # ── live scan view ────────────────────────────────────────────────────
-        elif p and (p.scanning or p.scan_done):
-            scanned  = getattr(p, "scanned_ips", 0)
-            online   = getattr(p, "online_ips",  0)
-            errors   = getattr(p, "errors",      0)
-            threads  = getattr(p, "threads",      0)
-            hit_rate = f"{(online / scanned * 100):.3f}%" if scanned > 0 else "0.000%"
-
-            lines += [
-                f"  Scanned  : {scanned:,}",
-                f"  Online   : {online:,}",
-                f"  Hit Rate : {hit_rate}",
-                f"  Errors   : {errors:,}",
-                f"  Threads  : {threads}",
-                dash,
-            ]
-
-            # live IP feed — fills all remaining rows
-            found       = getattr(p, "found", [])
-            header_rows = len(lines)
-            footer_rows = 3                              # dash + controls + sep
-            feed_rows   = max(1, height - header_rows - footer_rows)
-            visible     = found[-feed_rows:]
-
-            if visible:
-                for ip, port in visible:
-                    lines.append(f"  [+] {ip}:{port}"[:inner])
-            else:
-                dots = "." * (int(time.time() * 2) % 4)
-                lines.append(f"  Waiting for hits{dots}")
-
-        # ── idle ──────────────────────────────────────────────────────────────
-        else:
-            lines += [
-                "  Press [I] to start scan" if p
-                else "IP Scan module not configured correctly"
-            ]
-
-        lines += [
-            dash,
-            "  [I] New scan   [X] Close   [Q] Quit",
-            sep,
-        ]
-
-        start_y = max(0, (height - len(lines)) // 2)
-        for i, line in enumerate(lines):
-            y = start_y + i
-            if y >= height:
-                break
-            self._write_line(screen, y, pad_x, line[:inner], width)
-
-        return screen
-
     # ── main render ───────────────────────────────────────────────────────────
 
     def render(self):
@@ -524,8 +429,7 @@ class Dashboard:
             left_title = " TLS Inspect "
         elif self.web_scraper_mode:
             left_title = " Web Scraper "
-        elif self.ip_scan_mode:
-            left_title = " IP Scanner "
+        
         else:
             left_title = " Matrix "
 
@@ -543,8 +447,7 @@ class Dashboard:
             left_screen = self.render_tls_panel(left_inner_w, left_inner_h)
         elif self.web_scraper_mode:
             left_screen = self.render_scraper_panel(left_inner_w, left_inner_h)
-        elif self.ip_scan_mode:
-            left_screen = self.render_ip_scan_panel(left_inner_w, left_inner_h)
+        
         else:
             left_screen = self.render_matrix(left_inner_w, matrix_inner_h)
 
@@ -606,11 +509,7 @@ class Dashboard:
             "done"     if (self.web_scraper_panel and self.web_scraper_panel.scan_done) else
             "idle"
         )
-        ip_stat = (
-            "scanning"  if (self.ip_scan_panel and self.ip_scan_panel.scanning) else
-            "no module" if not self.ip_scan_panel else
-            "idle"
-        )
+        
 
         stat_lines = [
             f"IP      : {local_ip}",
@@ -619,8 +518,7 @@ class Dashboard:
             f"Anim    : {self.current_animation}",
             "─" * stats_inner,
             f"TLS     : {tls_stat}",
-            f"Scraper : {scraper_stat}",
-            f"IPScan  : {ip_stat}",
+            f"Scraper : {scraper_stat}"
         ]
 
         for i, line in enumerate(stat_lines):
@@ -633,7 +531,7 @@ class Dashboard:
             )
 
         # ── legend bar ────────────────────────────────────────────────────────
-        legend    = " [W]TLS  [S]Scrape  [I]IPScan  [T]Theme  [C]Legend  [Q]Quit"
+        legend    = " [W]TLS  [S]Scrape  [T]Theme  [C]Legend  [Q]Quit"
         st_txt    = "PAUSED" if self.paused else "LIVE"
         st_col    = self.get_color("bright_red") if self.paused else self.get_color("bright_green")
         bar_inner = main_w - 2
@@ -692,12 +590,7 @@ class Dashboard:
                     self._open_tls()
                 elif k == "s":
                     self._open_scraper()
-                elif k == "i":
-                    if not self.ip_scan_mode:
-                        self._open_ip_scan()
-                    else:
-                        self.ip_scan_mode  = False
-                        self.ip_scan_state = 0
+                
 
     # ── panel open / close ────────────────────────────────────────────────────
 
@@ -707,7 +600,6 @@ class Dashboard:
         self.ip_scan_mode      = False
         self.tls_inspect_state = 0
         self.web_scraper_state = 0
-        self.ip_scan_state     = 0
         self.active_input_mode = None
         self.input_buffer      = ""
         self._scraper_domain   = ""
@@ -720,10 +612,7 @@ class Dashboard:
             self.web_scraper_panel.scan_done = False
             self.web_scraper_panel.scanning  = False
             self.web_scraper_panel.results   = {}
-        if self.ip_scan_panel:
-            self.ip_scan_panel.scanning  = False
-            self.ip_scan_panel.scan_done = False
-            self.ip_scan_panel.found     = []
+     
 
     def _open_tls(self):
         self.tls_inspect_mode  = True
@@ -748,17 +637,7 @@ class Dashboard:
             self.web_scraper_panel.scan_done = False
             self.web_scraper_panel.results   = {}
 
-    def _open_ip_scan(self):
-        self.ip_scan_mode      = True
-        self.tls_inspect_mode  = False
-        self.web_scraper_mode  = False
-        self.ip_scan_state     = 1
-        self.active_input_mode = "ip_threads"    # ← only ask for thread count
-        self.input_buffer      = ""
-        if self.ip_scan_panel:
-            self.ip_scan_panel.scanning  = False
-            self.ip_scan_panel.scan_done = False
-            self.ip_scan_panel.found     = []
+
 
     # ── commit input ──────────────────────────────────────────────────────────
 
@@ -788,14 +667,7 @@ class Dashboard:
                 ).start()
             self._scraper_domain = ""
 
-        elif mode == "ip_threads":
-            if self.ip_scan_panel:
-                try:
-                    threads = int(val) if val else 250
-                except Exception:
-                    threads = 250
-                self.ip_scan_state = 2
-                self.ip_scan_panel.start(threads=threads)   # ports auto-discovered
+       
 
     # ── watch for tool completion ─────────────────────────────────────────────
 
@@ -813,10 +685,7 @@ class Dashboard:
                 self.web_scraper_state = 3
                 self.switch_animation("success")
 
-            ip = self.ip_scan_panel
-            if ip and ip.scan_done and self.ip_scan_state == 2:
-                self.ip_scan_state = 3
-                self.switch_animation("success")
+            
 
     # ── run ───────────────────────────────────────────────────────────────────
 
