@@ -34,7 +34,7 @@ except Exception:
 class Dashboard:
 
     THEMES = {
-        "pipboy": {"name": "pipboy", "feed": "bright_yellow", "stats": "bright_cyan",  "matrix": (0, 255, 65)},
+        "pipboy": {"name": "pipboy", "feed": "bright_green", "stats": "bright_green",  "matrix": (0, 255, 65)},
         "olive":  {"name": "olive",  "feed": "green",         "stats": "green",         "matrix": (0, 150, 40)},
         "bleed":  {"name": "bleed",  "feed": "bright_red",    "stats": "bright_red",    "matrix": (255, 30,  0)},
     }
@@ -54,6 +54,19 @@ class Dashboard:
         "ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ"
         "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&"
     )
+
+    # ── scraper filter type → selector template mapping ─────────────────────
+    FILTER_TEMPLATES = {
+        "1": ("element", "{value}"),              # raw tag selector, e.g. h1, table, a, img
+        "2": ("images",  "img[src*='{value}']"),  # image src contains value
+        "3": ("keyword", ".{value}"),              # class selector
+    }
+
+    PLACEHOLDER_HINTS = {
+        "element": "e.g. h1, div, table",
+        "images":  "e.g. logo, banner, icon",
+        "keyword": "e.g. price, product-title",
+    }
 
     # ── init ──────────────────────────────────────────────────────────────────
     def __init__(self, theme="pipboy", animate=10):
@@ -82,10 +95,22 @@ class Dashboard:
         self.web_scraper_state   = 0
         self.tls_inspect_state   = 0
 
-        # input routing  None | "tls_host" | "scraper_domain" | "scraper_flag" | "ip_threads"
+        # input routing  None | "tls_host" | "scraper_domain" | "scraper_filter_type" | "scraper_flag"
         self.active_input_mode   = None
         self.input_buffer        = ""
         self._scraper_domain     = ""
+
+        # scraper filter selection state
+        self._scraper_filter_key      = None
+        self._scraper_filter_template = None
+        self._scraper_filter_label    = None
+
+        # scraper phase tracking
+        # False = filter prompt not yet shown for this fetch
+        # True  = filter prompt has been shown; do not show again
+        self._scraper_filter_prompted = False
+        # True only between _commit_input(scraper_flag) and search completion
+        self._scraper_search_started  = False
 
         # matrix
         self.matrix_cols         = {}
@@ -247,11 +272,11 @@ class Dashboard:
     def _blank_screen(self, width, height):
         return [[(" ", False)] * width for _ in range(height)]
 
-    def _write_line(self, screen, row, col, text, width):
+    def _write_line(self, screen, row, col, text, width, color):
         for i, ch in enumerate(text):
             if col + i >= width:
                 break
-            screen[row][col + i] = (ch, False)
+            screen[row][col + i] = (color(ch) if color else ch, False)
 
     # ── TLS inspect panel ─────────────────────────────────────────────────────
 
@@ -260,6 +285,7 @@ class Dashboard:
         p      = self.tls_inspect_panel
         inner  = width - 4
         pad_x  = 2
+        fc     = self.get_color(self.theme["feed"])
 
         if p and p.scanning:
             status = f"SCANNING  {p.host}..."
@@ -318,7 +344,7 @@ class Dashboard:
             y = start_y + i
             if y >= height:
                 break
-            self._write_line(screen, y, pad_x, line[:inner], width)
+            self._write_line(screen, y, pad_x, line[:inner], width, color=fc)
 
         return screen
 
@@ -329,10 +355,11 @@ class Dashboard:
         p      = self.web_scraper_panel
         inner  = width - 4
         pad_x  = 2
+        fc     = self.get_color(self.theme["feed"])
 
         if p and p.scanning:
             status = f"SCRAPING  {getattr(p, 'domain', '...')}..."
-        elif p and p.scan_done and p.results:
+        elif self.web_scraper_state == 3:
             status = "COMPLETE"
         else:
             status = "READY"
@@ -355,9 +382,22 @@ class Dashboard:
                 "",
                 "  ENTER to continue  |  ESC to cancel",
             ]
-        elif self.active_input_mode == "scraper_flag":
+        elif self.active_input_mode == "scraper_filter_type":
             lines += [
                 f"  Domain  : {self._scraper_domain}",
+                "  Select filter type:",
+                "",
+                "    [1] Element   (e.g. h1, table, a, img)",
+                "    [2] Images    (search by image filename/src)",
+                "    [3] Keyword   (search by class name)",
+                "",
+                "  Press 1-3 to choose  |  ESC to cancel",
+            ]
+        elif self.active_input_mode == "scraper_flag":
+            hint = self.PLACEHOLDER_HINTS.get(self._scraper_filter_key, "")
+            lines += [
+                f"  Domain  : {self._scraper_domain}",
+                f"  Filter  : {self._scraper_filter_label}  ({hint})",
                 "  Enter text to search for:",
                 f"  > {self.input_buffer}█",
                 "",
@@ -366,7 +406,8 @@ class Dashboard:
         elif p and p.scanning:
             dots   = "." * (int(time.time() * 2) % 4)
             lines += [f"  Fetching page{dots}"]
-        elif p and p.scan_done and p.results:
+        elif self.web_scraper_state == 3 and p and p.results:
+            # ── results: only shown when state is explicitly 3 ──
             r     = p.results
             col_w = max(1, inner - 14)
             if r.get("error"):
@@ -383,6 +424,8 @@ class Dashboard:
                 for rl in result_lines:
                     lines.append(f"    {rl}")
             lines += ["", "  [S] scrape again  |  [X] close"]
+        elif self._scraper_domain and not self._scraper_filter_prompted:
+            lines += ["  Fetching page..."]
         else:
             lines += ["  Press [S] to scrape a domain"]
 
@@ -397,7 +440,7 @@ class Dashboard:
             y = start_y + i
             if y >= height:
                 break
-            self._write_line(screen, y, pad_x, line[:inner], width)
+            self._write_line(screen, y, pad_x, line[:inner], width, color=fc)
 
         return screen
 
@@ -429,7 +472,6 @@ class Dashboard:
             left_title = " TLS Inspect "
         elif self.web_scraper_mode:
             left_title = " Web Scraper "
-        
         else:
             left_title = " Matrix "
 
@@ -447,7 +489,6 @@ class Dashboard:
             left_screen = self.render_tls_panel(left_inner_w, left_inner_h)
         elif self.web_scraper_mode:
             left_screen = self.render_scraper_panel(left_inner_w, left_inner_h)
-        
         else:
             left_screen = self.render_matrix(left_inner_w, matrix_inner_h)
 
@@ -506,10 +547,9 @@ class Dashboard:
         )
         scraper_stat = (
             "scanning" if (self.web_scraper_panel and self.web_scraper_panel.scanning) else
-            "done"     if (self.web_scraper_panel and self.web_scraper_panel.scan_done) else
+            "done"     if (self.web_scraper_state == 3) else
             "idle"
         )
-        
 
         stat_lines = [
             f"IP      : {local_ip}",
@@ -564,6 +604,22 @@ class Dashboard:
 
                 # ── text input intercept ──────────────────────────────────────
                 if self.active_input_mode is not None:
+
+                    # filter-type screen is a single-keypress menu (1-3), not free text
+                    if self.active_input_mode == "scraper_filter_type":
+                        if k in self.FILTER_TEMPLATES:
+                            filter_key, template          = self.FILTER_TEMPLATES[k]
+                            self._scraper_filter_key      = filter_key
+                            self._scraper_filter_template = template
+                            self._scraper_filter_label    = filter_key.capitalize()
+                            self.input_buffer      = ""
+                            self.active_input_mode = "scraper_flag"
+                        elif key.code == self.term.KEY_ESCAPE:
+                            self.active_input_mode = None
+                            self.input_buffer      = ""
+                            self._scraper_domain   = ""
+                        continue
+
                     if key.code == self.term.KEY_ENTER:
                         self._commit_input()
                     elif key.code == self.term.KEY_BACKSPACE:
@@ -590,7 +646,6 @@ class Dashboard:
                     self._open_tls()
                 elif k == "s":
                     self._open_scraper()
-                
 
     # ── panel open / close ────────────────────────────────────────────────────
 
@@ -604,6 +659,12 @@ class Dashboard:
         self.input_buffer      = ""
         self._scraper_domain   = ""
 
+        self._scraper_filter_key      = None
+        self._scraper_filter_template = None
+        self._scraper_filter_label    = None
+        self._scraper_filter_prompted = False
+        self._scraper_search_started  = False
+
         if self.tls_inspect_panel:
             self.tls_inspect_panel.scan_done = False
             self.tls_inspect_panel.scanning  = False
@@ -612,7 +673,6 @@ class Dashboard:
             self.web_scraper_panel.scan_done = False
             self.web_scraper_panel.scanning  = False
             self.web_scraper_panel.results   = {}
-     
 
     def _open_tls(self):
         self.tls_inspect_mode  = True
@@ -633,11 +693,17 @@ class Dashboard:
         self.active_input_mode = "scraper_domain"
         self.input_buffer      = ""
         self._scraper_domain   = ""
+
+        self._scraper_filter_key      = None
+        self._scraper_filter_template = None
+        self._scraper_filter_label    = None
+        self._scraper_filter_prompted = False
+        self._scraper_search_started  = False
+
         if self.web_scraper_panel:
-            self.web_scraper_panel.scan_done = False
-            self.web_scraper_panel.results   = {}
-
-
+            self.web_scraper_panel.scan_done  = False
+            self.web_scraper_panel.fetch_done = False
+            self.web_scraper_panel.results    = {}
 
     # ── commit input ──────────────────────────────────────────────────────────
 
@@ -653,21 +719,29 @@ class Dashboard:
                 Thread(target=self.tls_inspect_panel.start, args=(val,), daemon=True).start()
 
         elif mode == "scraper_domain":
-            if val:
+            if val and self.web_scraper_panel:
                 self._scraper_domain   = val
-                self.active_input_mode = "scraper_flag"
+                self.web_scraper_state = 2
+                self.active_input_mode = None
+                self.web_scraper_panel.start_fetch(val)
+            else:
+                self.active_input_mode = "scraper_domain"
 
         elif mode == "scraper_flag":
             if self._scraper_domain and self.web_scraper_panel:
-                self.web_scraper_state = 2
-                Thread(
-                    target=self.web_scraper_panel.start,
-                    args=(self._scraper_domain, val),
-                    daemon=True,
-                ).start()
-            self._scraper_domain = ""
+                template     = self._scraper_filter_template or "{value}"
+                final_filter = template.format(value=val)
+                # reset scan_done so _watch_tools can detect search completion
+                self.web_scraper_panel.scan_done = False
+                self.web_scraper_panel.results   = {}
+                self._scraper_search_started     = True
+                self.web_scraper_state           = 2
+                self.web_scraper_panel.start_search(final_filter)
 
-       
+            # always clear filter key after committing
+            self._scraper_filter_key      = None
+            self._scraper_filter_template = None
+            self._scraper_filter_label    = None
 
     # ── watch for tool completion ─────────────────────────────────────────────
 
@@ -681,11 +755,25 @@ class Dashboard:
                 self.switch_animation("success")
 
             ws = self.web_scraper_panel
-            if ws and ws.scan_done and self.web_scraper_state == 2:
-                self.web_scraper_state = 3
-                self.switch_animation("success")
+            if ws and self.web_scraper_mode and self.web_scraper_state == 2:
+                fetch_done = getattr(ws, "fetch_done", False)
 
-            
+                # Phase 1: fetch finished → show filter prompt (only once, only if
+                # the search has not started yet)
+                if (fetch_done
+                        and not self._scraper_filter_prompted
+                        and not self._scraper_search_started
+                        and self.active_input_mode is None):
+                    self._scraper_filter_prompted = True
+                    self.active_input_mode = "scraper_filter_type"
+
+                # Phase 2: search finished → lock on results
+                elif (self._scraper_search_started
+                        and ws.scan_done
+                        and self.active_input_mode is None):
+                    self._scraper_search_started = False
+                    self.web_scraper_state       = 3
+                    self.switch_animation("success")
 
     # ── run ───────────────────────────────────────────────────────────────────
 
